@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImageSlider - Interactive Image Comparison</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280; 
+        }
+
+        /* Slider Specific Styles */
+        .comparison-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-image: 
+                linear-gradient(45deg, #1f2937 25%, transparent 25%), 
+                linear-gradient(-45deg, #1f2937 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #1f2937 75%), 
+                linear-gradient(-45deg, transparent 75%, #1f2937 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+            background-color: #111827;
+            
+            /* CSS Variable to control slider position. Default 50% */
+            --position: 50%;
+            
+            /* Pan Cursors */
+            cursor: default;
+        }
+
+        .comparison-container.pan-ready {
+            cursor: grab;
+        }
+        .comparison-container.panning {
+            cursor: grabbing;
+        }
+
+        .img-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            user-select: none;
+            pointer-events: none;
+            
+            /* Important for Zoom/Pan math */
+            transform-origin: 0 0;
+            will-change: transform;
+        }
+
+        /* The Foreground Wrapper
+           Instead of changing width, we clip it.
+           This ensures the internal content remains full size and aligned.
+        */
+        .fg-wrapper {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            /* Clip from the right side based on position */
+            clip-path: inset(0 calc(100% - var(--position)) 0 0);
+            pointer-events: none; /* Let events pass through to container */
+        }
+        
+        /* The Slider Handle */
+        .handle {
+            position: absolute;
+            top: 50%;
+            /* Use the CSS variable for position */
+            left: var(--position);
+            transform: translate(-50%, -50%);
+            width: 40px;
+            height: 40px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border-radius: 50%;
+            z-index: 20;
+            cursor: ew-resize;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            /* Add the vertical line via the handle */
+        }
+        
+        /* The Vertical Divider Line */
+        .divider-line {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: var(--position);
+            width: 2px;
+            background-color: white;
+            z-index: 19;
+            pointer-events: none;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+
+        .handle::after {
+            content: '';
+            display: block;
+            width: 4px;
+            height: 20px;
+            background-color: #333;
+            border-left: 2px solid #333;
+            border-right: 2px solid #333;
+        }
+
+        .label-badge {
+            position: absolute;
+            top: 20px;
+            padding: 4px 12px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-size: 0.8rem;
+            border-radius: 4px;
+            pointer-events: none;
+            z-index: 15;
+            font-weight: bold;
+        }
+
+        /* --- Thumbnail Strip --- */
+        #thumbnail-container {
+            overflow: hidden;
+            padding: 0 16px;
+        }
+        #thumbnail-strip {
+            display: flex;
+            gap: 12px;
+            padding: 8px 0;
+            overflow-x: auto;
+            scroll-behavior: smooth;
+        }
+        .thumbnail-item {
+            position: relative;
+            width: 80px;
+            height: 60px;
+            border: 2px solid transparent;
+            border-radius: 4px;
+            overflow: hidden;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: all 0.2s ease-in-out;
+            background-size: cover;
+            background-position: center;
+        }
+        .thumbnail-item:hover {
+            border-color: #6b7280;
+        }
+        .thumbnail-item.thumb-left {
+            border-color: #3b82f6; /* blue-500 */
+            box-shadow: 0 0 10px #3b82f6;
+        }
+        .thumbnail-item.thumb-right {
+            border-color: #10b981; /* green-500 */
+            box-shadow: 0 0 10px #10b981;
+        }
+        .thumb-label {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 1px 0;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            font-size: 0.65rem;
+            text-align: center;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white h-screen flex flex-col overflow-hidden">
+
+    <!-- Header / Controls -->
+        <header class="bg-gray-800 border-b border-gray-700 p-4 flex flex-col md:flex-row items-center justify-between gap-4 z-30 shadow-md">
+        <div class="flex items-center gap-3">
+            <div class="bg-blue-600 p-2 rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+            </div>
+            <h1 class="text-xl font-bold tracking-tight">Image<span class="text-blue-400 font-light">Slider</span></h1>
+        </div>
+
+        <!-- Image Selectors -->
+        <div id="controlsArea" class="flex-1 flex items-center justify-center gap-4 opacity-50 pointer-events-none">
+            <div class="flex items-center gap-2">
+                <label for="select-left" class="text-sm font-medium text-blue-300">Left:</label>
+                <select id="select-left" class="bg-gray-700 border border-gray-600 rounded-md py-1 px-2 text-sm w-72 appearance-none"></select>
+            </div>
+            <button id="swap-button" title="Swap Left & Right (S)" class="p-2 bg-gray-700 hover:bg-gray-600 rounded-md transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+            </button>
+            <div class="flex items-center gap-2">
+                <label for="select-right" class="text-sm font-medium text-green-300">Right:</label>
+                <select id="select-right" class="bg-gray-700 border border-gray-600 rounded-md py-1 px-2 text-sm w-72 appearance-none"></select>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <label for="file-upload" class="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                <span>Add Images</span>
+                <input id="file-upload" type="file" class="hidden" multiple accept="image/*">
+            </label>
+            <button id="clear-button" class="cursor-pointer bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd" />
+                </svg>
+                <span>Clear</span>
+            </button>
+            <button id="reset-view-button" title="Reset View (R)" class="cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />                </svg>
+                <span>Reset</span>
+            </button>
+            <span id="image-count" class="text-xs text-gray-400 bg-gray-800 px-2 py-1 rounded border border-gray-700">0 loaded</span>
+        </div>
+        <button id="help-button" class="p-2.5 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+        </button>
+    </header>
+            
+                <!-- Main Comparison Area -->
+                <main class="flex-1 relative flex overflow-hidden">
+                    
+                    <!-- Empty State -->
+                    <div id="empty-state" class="absolute inset-0 flex flex-col items-center justify-center text-gray-400 z-0">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-24 w-24 mb-4 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <p class="text-lg font-medium">No images uploaded</p>
+                        <p class="text-sm">Click "Add Images" or drag and drop files here to begin.</p>
+                    </div>
+            
+                    <!-- The Stage -->
+                    <div id="stage" class="relative w-full h-full hidden">
+                        <!-- 
+                             We listen for mouse events on this container. 
+                             When space is held, we pan. When not, the handle (or touch) drives the slider.
+                        -->
+                        <div class="comparison-container" id="comparison-container">
+                            
+                            <!-- Background Layer (Right Image) -->
+                            <img id="img-bg" class="img-layer" src="" alt="Background">
+                            <div class="label-badge right-5">Right</div>
+            
+                            <!-- Foreground Layer (Left Image) - CLIPPED -->
+                            <div class="fg-wrapper" id="fg-wrapper">
+                                <img id="img-fg" class="img-layer" src="" alt="Foreground">
+                                <div class="label-badge left-5">Left</div>
+                            </div>
+            
+                            <!-- Divider Line -->
+                            <div class="divider-line"></div>
+            
+                            <!-- Handle -->
+                            <div class="handle" id="handle">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
+                            </div>
+                        </div>
+                    </div>
+                </main>
+            
+                <!-- Help Modal -->
+                <div id="help-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+                    <div class="bg-gray-800 text-white rounded-lg shadow-xl p-6 w-full max-w-lg">
+                        <div class="flex justify-between items-center border-b border-gray-700 pb-3">
+                            <h3 class="text-lg font-semibold">Controls & Shortcuts</h3>
+                            <button id="close-modal-button" class="text-gray-400 hover:text-white">&times;</button>
+                        </div>
+                        <div class="mt-4 space-y-4 text-sm">
+                            <p>Use the following controls to compare your images:</p>
+                            <ul class="list-disc list-inside space-y-2">
+                                <li><b>Slider:</b> Click and drag the handle to move the divider.</li>
+                                <li><b>Pan:</b> Hold down the <kbd class="px-1 py-1 text-xs font-semibold text-gray-800 bg-gray-100 border border-gray-200 rounded-lg">Spacebar</kbd> , then click and drag to pan the image.</li>
+                                <li><b>Zoom:</b> Use the scroll wheel on your mouse to zoom in and out.</li>
+                            </ul>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <h4 class="font-semibold">Key</h4>
+                                    <p>S</p>
+                                    <p>R</p>
+                                    <p>&rarr; / &larr;</p>
+                                    <p>Shift + &rarr; / &larr;</p>
+                                </div>
+                                <div>
+                                    <h4 class="font-semibold">Action</h4>
+                                    <p>Swap Left & Right images</p>
+                                    <p>Reset Pan & Zoom</p>
+                                    <p>Cycle Right Image</p>
+                                    <p>Cycle Left Image</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            
+                                <script>
+                    // State
+                    const state = {
+                        images: [], 
+                        leftIndex: 0,
+                        rightIndex: 0,
+                        
+                        // Slider State
+                        isDraggingSlider: false,
+                        
+                        // Zoom/Pan State
+                        scale: 1,
+                        panX: 0,
+                        panY: 0,
+                        isSpaceDown: false,
+                        isPanning: false,
+                        panStartX: 0,
+                        panStartY: 0
+                    };
+
+                    // DOM Elements
+                    const fileInput = document.getElementById('file-upload');
+                    const emptyState = document.getElementById('empty-state');
+                    const stage = document.getElementById('stage');
+                    const imageCount = document.getElementById('image-count');
+                    const controlsArea = document.getElementById('controlsArea');
+                    const selectLeft = document.getElementById('select-left');
+                    const selectRight = document.getElementById('select-right');
+                    
+                    const swapButton = document.getElementById('swap-button');
+                    const resetViewButton = document.getElementById('reset-view-button');
+                    const helpButton = document.getElementById('help-button');
+                    const helpModal = document.getElementById('help-modal');
+                    const closeModalButton = document.getElementById('close-modal-button');
+
+                    const container = document.getElementById('comparison-container');
+                    const handle = document.getElementById('handle');
+                    const imgBg = document.getElementById('img-bg');
+                    const imgFg = document.getElementById('img-fg');
+                    const clearButton = document.getElementById('clear-button');
+
+                    // --- Event Listeners ---
+
+                    // File Upload
+                    fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+                    clearButton.addEventListener('click', clearImages);
+                    swapButton.addEventListener('click', swapImages);
+                    resetViewButton.addEventListener('click', resetView);
+
+                    // Selectors
+                    selectLeft.addEventListener('change', (e) => {
+                        state.leftIndex = parseInt(e.target.value, 10);
+                        updateView();
+                    });
+                    selectRight.addEventListener('change', (e) => {
+                        state.rightIndex = parseInt(e.target.value, 10);
+                        updateView();
+                    });
+                    
+                    // Modal Listeners
+                    helpButton.addEventListener('click', () => helpModal.classList.remove('hidden'));
+                    closeModalButton.addEventListener('click', () => helpModal.classList.add('hidden'));
+                    helpModal.addEventListener('click', (e) => {
+                        if (e.target === helpModal) {
+                            helpModal.classList.add('hidden');
+                        }
+                    });
+
+                    // Drag and Drop support
+                    document.body.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
+                    document.body.addEventListener('drop', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if(e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                            handleFiles(e.dataTransfer.files);
+                        }
+                    });
+
+                    // --- ZOOM, PAN, AND KEYBOARD SHORTCUTS ---
+
+                    document.addEventListener('keydown', (e) => {
+                        // Check for modal close first
+                        if (e.key === 'Escape' && !helpModal.classList.contains('hidden')) {
+                            helpModal.classList.add('hidden');
+                            e.preventDefault();
+                            return;
+                        }
+
+                        // Don't interfere with form inputs or if modal is open
+                        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || !helpModal.classList.contains('hidden')) {
+                            return;
+                        }
+
+                        // Pan mode is highest priority
+                        if (e.code === 'Space' && !state.isSpaceDown) {
+                            state.isSpaceDown = true;
+                            updateCursor();
+                            e.preventDefault();
+                            return;
+                        }
+
+                        // Keyboard shortcuts only work if there are images
+                        if (state.images.length === 0) return;
+
+                        let shouldUpdate = false;
+                        const key = e.key.toLowerCase();
+                        const maxIndex = state.images.length - 1;
+
+                        switch (key) {
+                            case 's':
+                                swapImages();
+                                e.preventDefault();
+                                break;
+                            case 'r':
+                                resetView();
+                                e.preventDefault();
+                                break;
+                            case 'arrowright':
+                                if (e.shiftKey) { // Control Left Image
+                                    state.leftIndex = state.leftIndex >= maxIndex ? 0 : state.leftIndex + 1;
+                                } else { // Control Right Image
+                                    state.rightIndex = state.rightIndex >= maxIndex ? 0 : state.rightIndex + 1;
+                                }
+                                shouldUpdate = true;
+                                e.preventDefault();
+                                break;
+                            case 'arrowleft':
+                                if (e.shiftKey) { // Control Left Image
+                                    state.leftIndex = state.leftIndex <= 0 ? maxIndex : state.leftIndex - 1;
+                                } else { // Control Right Image
+                                    state.rightIndex = state.rightIndex <= 0 ? maxIndex : state.rightIndex - 1;
+                                }
+                                shouldUpdate = true;
+                                e.preventDefault();
+                                break;
+                        }
+
+                        if (shouldUpdate) {
+                            refreshSelectors();
+                            updateView();
+                        }
+                    });
+
+                    document.addEventListener('keyup', (e) => {
+                        if (e.code === 'Space') {
+                            state.isSpaceDown = false;
+                            state.isPanning = false; // Stop panning if key released mid-drag
+                            updateCursor();
+                        }
+                    });
+
+                    function updateCursor() {
+                        if (state.isPanning) {
+                            container.classList.add('panning');
+                            container.classList.remove('pan-ready');
+                        } else if (state.isSpaceDown) {
+                            container.classList.add('pan-ready');
+                            container.classList.remove('panning');
+                        } else {
+                            container.classList.remove('pan-ready', 'panning');
+                        }
+                    }
+
+                    // 2. Wheel Zoom
+                    container.addEventListener('wheel', (e) => {
+                        if (state.images.length === 0) return;
+                        e.preventDefault();
+
+                        const rect = container.getBoundingClientRect();
+                        
+                        // Mouse position relative to container
+                        const mouseX = e.clientX - rect.left;
+                        const mouseY = e.clientY - rect.top;
+
+                        // Determine Zoom direction
+                        const zoomSensitivity = 0.1;
+                        const delta = -Math.sign(e.deltaY) * zoomSensitivity;
+                        
+                        // Calculate new Scale
+                        const oldScale = state.scale;
+                        let newScale = oldScale + delta;
+                        
+                        // Constraints (0.1x to 20x)
+                        if (newScale < 0.1) newScale = 0.1;
+                        if (newScale > 20) newScale = 20;
+
+                        // Math to zoom towards mouse pointer:
+                        // The point under the mouse (mouseX, mouseY) should stay stationary relative to the container.
+                        // Formula: newPan = mouse - (mouse - oldPan) * (newScale / oldScale)
+                        state.panX = mouseX - (mouseX - state.panX) * (newScale / oldScale);
+                        state.panY = mouseY - (mouseY - state.panY) * (newScale / oldScale);
+
+                        state.scale = newScale;
+                        updateTransforms();
+                    }, { passive: false });
+
+                    // 3. Panning Logic (Mouse)
+                    container.addEventListener('mousedown', (e) => {
+                        if (state.isSpaceDown) {
+                            // Start Panning
+                            state.isPanning = true;
+                            state.panStartX = e.clientX - state.panX;
+                            state.panStartY = e.clientY - state.panY;
+                            updateCursor();
+                            e.preventDefault(); // Prevent text selection
+                        } else {
+                            // Not pressing space? Check if we might be initiating other interactions
+                            // But generally, handle click is separate.
+                        }
+                    });
+
+                    window.addEventListener('mousemove', (e) => {
+                        // Handle Pan Move
+                        if (state.isPanning && state.isSpaceDown) {
+                            state.panX = e.clientX - state.panStartX;
+                            state.panY = e.clientY - state.panStartY;
+                            updateTransforms();
+                            return; // Don't do slider logic if panning
+                        }
+
+                        // Handle Slider Move
+                        if (state.isDraggingSlider) {
+                            moveSlider(e);
+                        }
+                    });
+
+                    window.addEventListener('mouseup', () => {
+                        state.isPanning = false;
+                        state.isDraggingSlider = false;
+                        updateCursor();
+                    });
+
+                    // --- SLIDER LOGIC ---
+
+                    const startSliderDrag = (e) => {
+                        // Only start slider drag if NOT holding space
+                        if (state.isSpaceDown) return;
+                        
+                        state.isDraggingSlider = true;
+                        e.stopPropagation(); // prevent bubbling to container if needed
+                    };
+                    
+                    const moveSlider = (e) => {
+                        // Get X position regardless of touch or mouse
+                        let clientX = e.clientX;
+                        if (e.touches && e.touches.length > 0) {
+                            clientX = e.touches[0].clientX;
+                        }
+
+                        const rect = container.getBoundingClientRect();
+                        let pos = clientX - rect.left;
+                        
+                        // Clamp values
+                        if (pos < 0) pos = 0;
+                        if (pos > rect.width) pos = rect.width;
+
+                        const percentage = (pos / rect.width) * 100;
+                        container.style.setProperty('--position', percentage + '%');
+                    };
+
+                    // Attach slider start events
+                    handle.addEventListener('mousedown', startSliderDrag);
+
+                    container.addEventListener('touchstart', (e) => {
+                         startSliderDrag(e);
+                    }, {passive: false});
+
+                    window.addEventListener('touchmove', (e) => {
+                        if(state.isDraggingSlider) {
+                            e.preventDefault(); // prevent scrolling while sliding
+                            moveSlider(e);
+                        }
+                    }, {passive: false});
+                    
+                    window.addEventListener('touchend', () => state.isDraggingSlider = false);
+
+                    // --- Functions ---
+
+                    function updateTransforms() {
+                        // Apply scale and translation to BOTH images
+                        // We use 3D transform for hardware acceleration
+                        const transformString = `translate(${state.panX}px, ${state.panY}px) scale(${state.scale})`;
+                        
+                        imgBg.style.transform = transformString;
+                        imgFg.style.transform = transformString;
+                    }
+
+                    async function handleFiles(fileList) {
+                        const files = Array.from(fileList);
+                        
+                        if (files.length === 0) return;
+
+                        // Process files
+                        const promises = files.map(file => {
+                            return new Promise((resolve) => {
+                                const reader = new FileReader();
+                                reader.onload = (e) => {
+                                    resolve({
+                                        name: file.name,
+                                        url: e.target.result
+                                    });
+                                };
+                                reader.readAsDataURL(file);
+                            });
+                        });
+
+                        const newImages = await Promise.all(promises);
+                        state.images = [...state.images, ...newImages];
+
+                        // UI Updates
+                        imageCount.innerText = `${state.images.length} loaded`;
+                        
+                        if (state.images.length > 0) {
+                            emptyState.classList.add('hidden');
+                            stage.classList.remove('hidden');
+                            controlsArea.classList.remove('opacity-50', 'pointer-events-none');
+                        }
+
+                        // Auto-select logic for first load
+                        if (state.images.length >= 2 && state.images.length === newImages.length) {
+                            state.leftIndex = 0;
+                            state.rightIndex = 1;
+                        } else if (state.images.length === 1 && newImages.length === 1) {
+                             state.leftIndex = 0;
+                             state.rightIndex = 0;
+                        }
+
+                        refreshSelectors();
+                        updateView();
+                        
+                        // Reset zoom on new file load?
+                        state.scale = 1;
+                        state.panX = 0;
+                        state.panY = 0;
+                        updateTransforms();
+                    }
+
+                    function refreshSelectors() {
+                        const createOptions = (selectedIndex) => {
+                            return state.images.map((img, idx) => {
+                                return `<option value="${idx}" ${idx === selectedIndex ? 'selected' : ''}>${idx + 1}. ${truncate(img.name, 60)}</option>`;
+                            }).join('');
+                        };
+
+                        selectLeft.innerHTML = createOptions(state.leftIndex);
+                        selectRight.innerHTML = createOptions(state.rightIndex);
+                    }
+
+                    function updateView() {
+                        if (state.images.length === 0) return;
+                        const leftImg = state.images[state.leftIndex];
+                        const rightImg = state.images[state.rightIndex];
+
+                        if (leftImg) imgFg.src = leftImg.url;
+                        if (rightImg) imgBg.src = rightImg.url;
+                    }
+
+                    function truncate(str, n){
+                        return (str.length > n) ? str.substr(0, n-1) + '&hellip;' : str;
+                    }
+
+                    function clearImages() {
+                        // Reset state
+                        state.images = [];
+                        state.leftIndex = 0;
+                        state.rightIndex = 0;
+                        state.scale = 1;
+                        state.panX = 0;
+                        state.panY = 0;
+
+                        // Reset UI
+                        stage.classList.add('hidden');
+                        emptyState.classList.remove('hidden');
+                        controlsArea.classList.add('opacity-50', 'pointer-events-none');
+                        imageCount.innerText = '0 loaded';
+
+                        // Clear dropdowns
+                        selectLeft.innerHTML = '<option>Select Image</option>';
+                        selectRight.innerHTML = '<option>Select Image</option>';
+
+                        // Reset image sources
+                        imgFg.src = '';
+                        imgBg.src = '';
+                        
+                        // Reset transforms
+                        updateTransforms();
+                    }
+
+                    function swapImages() {
+                        if (state.images.length < 2) return;
+                        // Swap indices
+                        [state.leftIndex, state.rightIndex] = [state.rightIndex, state.leftIndex];
+                        
+                        // Update UI
+                        refreshSelectors();
+                        updateView();
+                    }
+
+                    function resetView() {
+                        state.scale = 1;
+                        state.panX = 0;
+                        state.panY = 0;
+                        updateTransforms();
+                    }
+
+                </script>
+</body>
+</html>
