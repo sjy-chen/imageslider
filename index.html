@@ -136,55 +136,6 @@
             z-index: 15;
             font-weight: bold;
         }
-
-        /* --- Thumbnail Strip --- */
-        #thumbnail-container {
-            overflow: hidden;
-            padding: 0 16px;
-        }
-        #thumbnail-strip {
-            display: flex;
-            gap: 12px;
-            padding: 8px 0;
-            overflow-x: auto;
-            scroll-behavior: smooth;
-        }
-        .thumbnail-item {
-            position: relative;
-            width: 80px;
-            height: 60px;
-            border: 2px solid transparent;
-            border-radius: 4px;
-            overflow: hidden;
-            cursor: pointer;
-            flex-shrink: 0;
-            transition: all 0.2s ease-in-out;
-            background-size: cover;
-            background-position: center;
-        }
-        .thumbnail-item:hover {
-            border-color: #6b7280;
-        }
-        .thumbnail-item.thumb-left {
-            border-color: #3b82f6; /* blue-500 */
-            box-shadow: 0 0 10px #3b82f6;
-        }
-        .thumbnail-item.thumb-right {
-            border-color: #10b981; /* green-500 */
-            box-shadow: 0 0 10px #10b981;
-        }
-        .thumb-label {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            padding: 1px 0;
-            background: rgba(0,0,0,0.7);
-            color: white;
-            font-size: 0.65rem;
-            text-align: center;
-            font-weight: bold;
-        }
     </style>
 </head>
 <body class="bg-gray-900 text-white h-screen flex flex-col overflow-hidden">
@@ -727,4 +678,5 @@
 
                 </script>
 </body>
+
 </html>
